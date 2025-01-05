@@ -6,6 +6,8 @@ class GameState {
         this.placedTiles = new Map();
         this.selectedBiome = null;
         this.journal = [];
+        this.availableBiomes = new Set(Object.keys(CONFIG.BIOME_COLORS));
+        this.currentRollBiomes = new Set(); // Track biomes for current roll
     }
 
     reset() {
@@ -13,6 +15,8 @@ class GameState {
         this.journal = [];
         this.selectedBiome = null;
         this.currentDie = 0;
+        this.availableBiomes = new Set(Object.keys(CONFIG.BIOME_COLORS));
+        this.currentRollBiomes.clear();
     }
 }
 
@@ -86,6 +90,165 @@ class Game {
         console.log(`Die rolled: ${this.state.currentDie}`);
     }
 
+    updateBiomeSelection(count) {
+        console.log(`Updating biome selection with count: ${count}`);
+        const selection = document.getElementById('biomeSelection');
+        if (!selection) {
+            console.error("Biome selection element not found");
+            return;
+        }
+        
+        selection.innerHTML = '';
+        
+        // If this is a new roll (not just updating after placement)
+        if (count > 0) {
+            const availableBiomes = Array.from(this.state.availableBiomes);
+            
+            if (availableBiomes.length === 0) {
+                this.addJournalEntry("No more biomes available!");
+                selection.innerHTML = '<div class="no-biomes">No more biomes available!</div>';
+                return;
+            }
+
+            // Clear previous roll's biomes and select new ones
+            this.state.currentRollBiomes.clear();
+            const selectedCount = Math.min(count, availableBiomes.length);
+            const shuffled = availableBiomes.sort(() => Math.random() - 0.5);
+            const selectedBiomes = shuffled.slice(0, selectedCount);
+            
+            selectedBiomes.forEach(biome => {
+                this.state.currentRollBiomes.add(biome);
+            });
+        }
+        
+        // Display current roll's remaining biomes
+        this.state.currentRollBiomes.forEach(biome => {
+            const button = document.createElement('div');
+            button.className = 'biome-btn';
+            button.dataset.name = biome;
+            button.dataset.biome = biome;
+            const shortName = this.getShortBiomeName(biome);
+            button.textContent = shortName;
+            button.style.backgroundColor = CONFIG.BIOME_COLORS[biome];
+            
+            button.draggable = true;
+            button.addEventListener('dragstart', this.handleDragStart.bind(this));
+            button.addEventListener('dragend', this.handleDragEnd.bind(this));
+            button.addEventListener('click', () => this.selectBiome(biome));
+            selection.appendChild(button);
+        });
+    }
+
+    getShortBiomeName(biome) {
+        // Create shortened versions of biome names
+        const words = biome.split(' ');
+        if (words.length === 1) {
+            return words[0].substring(0, 3);
+        }
+        return words.map(word => word[0]).join('');
+    }
+
+    handleDragStart(e) {
+        const biome = e.target.dataset.biome;
+        e.dataTransfer.setData('text/plain', biome);
+        e.target.classList.add('dragging');
+        this.selectBiome(biome);
+    }
+
+    handleDragEnd(e) {
+        e.target.classList.remove('dragging');
+    }
+
+    handleDragOver(e) {
+        e.preventDefault(); // Necessary to allow dropping
+        
+        const hex = e.target;
+        const q = parseInt(hex.dataset.q);
+        const r = parseInt(hex.dataset.r);
+        
+        // Show visual feedback for valid/invalid placement
+        if (this.state.selectedBiome && this.isValidPlacement(q, r, this.state.selectedBiome)) {
+            hex.classList.add('valid-drop');
+        } else {
+            hex.classList.add('invalid-drop');
+        }
+    }
+
+    handleDragEnter(e) {
+        e.preventDefault();
+        const hex = e.target;
+        hex.classList.add('drag-over');
+    }
+
+    handleDragLeave(e) {
+        const hex = e.target;
+        hex.classList.remove('drag-over');
+        hex.classList.remove('valid-drop');
+        hex.classList.remove('invalid-drop');
+    }
+
+    handleDrop(e) {
+        e.preventDefault();
+        const hex = e.target;
+        const biome = e.dataTransfer.getData('text/plain');
+        const q = parseInt(hex.dataset.q);
+        const r = parseInt(hex.dataset.r);
+        
+        // Remove drag feedback classes
+        hex.classList.remove('drag-over');
+        hex.classList.remove('valid-drop');
+        hex.classList.remove('invalid-drop');
+        
+        // Place the tile using existing logic
+        this.placeTile(q, r);
+    }
+
+    initializeGrid() {
+        console.log("Initializing grid...");
+        const grid = document.getElementById('hexGrid');
+        if (!grid) {
+            console.error("Grid element not found");
+            return;
+        }
+        
+        grid.innerHTML = '';
+        const size = this.state.boardSize;
+        const hexSize = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--hex-size'));
+        
+        const gridCenter = {
+            x: grid.offsetWidth / 2,
+            y: grid.offsetHeight / 2
+        };
+        
+        for (let q = -size; q <= size; q++) {
+            for (let r = -size; r <= size; r++) {
+                if (Math.abs(q + r) <= size) {
+                    const hex = document.createElement('div');
+                    hex.className = 'hex';
+                    
+                    const x = hexSize * (3/2 * q);
+                    const y = hexSize * (Math.sqrt(3)/2 * q + Math.sqrt(3) * r);
+                    
+                    hex.style.left = `${x + gridCenter.x}px`;
+                    hex.style.top = `${y + gridCenter.y}px`;
+                    hex.dataset.q = q;
+                    hex.dataset.r = r;
+                    
+                    // Add drag and drop event listeners
+                    hex.addEventListener('dragover', this.handleDragOver.bind(this));
+                    hex.addEventListener('drop', this.handleDrop.bind(this));
+                    hex.addEventListener('dragenter', this.handleDragEnter.bind(this));
+                    hex.addEventListener('dragleave', this.handleDragLeave.bind(this));
+                    
+                    // Keep click handler as fallback
+                    hex.addEventListener('click', () => this.placeTile(q, r));
+                    grid.appendChild(hex);
+                }
+            }
+        }
+        console.log("Grid initialization complete");
+    }
+
     getNeighbors(q, r) {
         return CONFIG.HEX_DIRECTIONS.map(([dq, dr]) => [q + dq, r + dr]);
     }
@@ -123,79 +286,6 @@ class Game {
         return hasAdjacentTile && isValidAdjacency;
     }
 
-    initializeGrid() {
-        console.log("Initializing grid...");
-        const grid = document.getElementById('hexGrid');
-        if (!grid) {
-            console.error("Grid element not found");
-            return;
-        }
-        
-        grid.innerHTML = '';
-        const size = this.state.boardSize;
-        const hexSize = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--hex-size'));
-        
-        // Calculate grid center once
-        const gridCenter = {
-            x: grid.offsetWidth / 2,
-            y: grid.offsetHeight / 2
-        };
-        
-        for (let q = -size; q <= size; q++) {
-            for (let r = -size; r <= size; r++) {
-                if (Math.abs(q + r) <= size) {
-                    const hex = document.createElement('div');
-                    hex.className = 'hex';
-                    
-                    // Improved hex positioning calculation
-                    const x = hexSize * (3/2 * q);
-                    const y = hexSize * (Math.sqrt(3)/2 * q + Math.sqrt(3) * r);
-                    
-                    hex.style.left = `${x + gridCenter.x}px`;
-                    hex.style.top = `${y + gridCenter.y}px`;
-                    hex.dataset.q = q;
-                    hex.dataset.r = r;
-                    
-                    hex.addEventListener('click', () => this.placeTile(q, r));
-                    grid.appendChild(hex);
-                }
-            }
-        }
-        console.log("Grid initialization complete");
-    }
-
-    updateBiomeSelection(count) {
-        console.log(`Updating biome selection with count: ${count}`);
-        const selection = document.getElementById('biomeSelection');
-        if (!selection) {
-            console.error("Biome selection element not found");
-            return;
-        }
-        
-        selection.innerHTML = '';
-        const availableBiomes = Object.keys(CONFIG.BIOME_COLORS);
-        const selectedBiomes = new Set();
-        
-        for (let i = 0; i < count; i++) {
-            if (availableBiomes.length === selectedBiomes.size) break;
-            
-            let biome;
-            do {
-                biome = availableBiomes[Math.floor(Math.random() * availableBiomes.length)];
-            } while (selectedBiomes.has(biome));
-            
-            selectedBiomes.add(biome);
-            
-            const button = document.createElement('button');
-            button.className = 'biome-btn';
-            button.textContent = biome;
-            button.style.backgroundColor = CONFIG.BIOME_COLORS[biome];
-            button.addEventListener('click', () => this.selectBiome(biome));
-            selection.appendChild(button);
-        }
-        console.log("Biome selection updated");
-    }
-
     selectBiome(biome) {
         console.log(`Selecting biome: ${biome}`);
         this.state.selectedBiome = biome;
@@ -204,7 +294,7 @@ class Game {
         const buttons = document.querySelectorAll('.biome-btn');
         buttons.forEach(btn => {
             btn.classList.remove('selected');
-            if (btn.textContent === biome) {
+            if (btn.dataset.biome === biome) {
                 btn.classList.add('selected');
             }
         });
@@ -252,8 +342,19 @@ class Game {
         if (tile) {
             tile.style.backgroundColor = CONFIG.BIOME_COLORS[this.state.selectedBiome];
             this.state.placedTiles.set(key, this.state.selectedBiome);
+            
+            // Remove the placed biome from both available biomes and current roll
+            this.state.availableBiomes.delete(this.state.selectedBiome);
+            this.state.currentRollBiomes.delete(this.state.selectedBiome);
+            
             this.addJournalEntry(`Placed ${this.state.selectedBiome} at (${q}, ${r})`);
             console.log(`Successfully placed ${this.state.selectedBiome} at q:${q}, r:${r}`);
+            
+            // Clear selection
+            this.state.selectedBiome = null;
+            
+            // Update display with remaining biomes from current roll
+            this.updateBiomeSelection(0); // Pass 0 to indicate this is not a new roll
         }
     }
 }
